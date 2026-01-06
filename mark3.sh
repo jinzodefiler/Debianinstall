@@ -27,6 +27,10 @@
 #     * Includes an explicit “oh god why?!” confirmation
 #     * Because KDE 3 refuses to stay dead
 #
+# - NEW: Backports manager menu:
+#     * Detect + enable Debian backports repo
+#     * Writes /etc/apt/sources.list.d/backports.list
+#
 # Warnings:
 # - This script edits APT sources. Backups are created.
 # - USING THE NVIDIA REPO DRIVER MAY BREAK YOUR SYSTEM.
@@ -222,6 +226,74 @@ Backups will be created with suffix:
   fi
 }
 
+# ---------- Backports manager ----------
+enable_backports_repo() {
+  if [[ "${DEBIAN_CODENAME}" == "unknown" || -z "${DEBIAN_CODENAME}" ]]; then
+    msg "Backports" "Cannot determine Debian codename. Not touching APT sources."
+    return 0
+  fi
+
+  # If already enabled, be smug and leave.
+  detect_backports_enabled
+  if [[ "$BACKPORTS_ENABLED" == "yes" ]]; then
+    msg "Backports" "Backports already appears enabled.\n\nYou’re already living on the edge (a very Debian edge, but still)."
+    return 0
+  fi
+
+  msg "Enable Backports" \
+"This will add Debian backports:
+  ${DEBIAN_CODENAME}-backports
+
+File to be written:
+  /etc/apt/sources.list.d/backports.list
+
+Backports are generally safe-ish, but they are still newer packages.
+Use them intentionally, not emotionally."
+
+  local bp_file="/etc/apt/sources.list.d/backports.list"
+  backup_file "$bp_file"
+
+  cat > "$bp_file" <<EOF
+# Added by Debian Maintenance / New Install
+# Backports: newer packages, still Debian-flavored.
+deb http://deb.debian.org/debian ${DEBIAN_CODENAME}-backports main contrib non-free
+EOF
+
+  log_run "Backports: APT Update" apt-get update
+  detect_backports_enabled
+
+  if [[ "$BACKPORTS_ENABLED" == "yes" ]]; then
+    msg "Backports" "Backports enabled.\n\nNow you can install newer kernels/drivers without going full testing/unstable."
+  else
+    msg "Backports" "Tried enabling backports, but detection still says no.\n\nCheck your network, APT sources, and whether deb.debian.org is reachable."
+  fi
+}
+
+backports_menu() {
+  detect_backports_enabled
+  while true; do
+    local choice
+    choice="$(dialog --clear \
+      --backtitle "${APP_TITLE} — ${DEBIAN_VERSION_ID} (${DEBIAN_CODENAME}) | Backports: ${BACKPORTS_ENABLED}" \
+      --title "Backports Manager" \
+      --menu "Debian backports controls:" 16 88 6 \
+      1 "Enable backports repo (${DEBIAN_CODENAME}-backports)" \
+      2 "Show backports status" \
+      0 "Back" \
+      2>&1 >/dev/tty || true)"
+
+    case "$choice" in
+      1) enable_backports_repo ;;
+      2)
+        detect_backports_enabled
+        msg "Backports Status" "Backports: ${BACKPORTS_ENABLED}\n\nIf you wanted excitement, you’d run unstable.\nBackports is the 'I want newer stuff but also sleep' option."
+        ;;
+      0|"") return 0 ;;
+    esac
+    detect_backports_enabled
+  done
+}
+
 # ---------- kernel ----------
 kernel_latest_stable() {
   log_run "Kernel (stable)" bash -c "apt-get update && apt-get install -y --no-install-recommends linux-image-amd64"
@@ -286,11 +358,6 @@ This may fail unless ${DEBIAN_CODENAME}-backports is configured.
 }
 
 # ---------- NVIDIA ----------
-# Ah yes. NVIDIA.
-# Closed-source drivers, kernel ABI shenanigans, and a time-honored tradition of
-# turning a perfectly normal kernel update into an interpretive dance with DKMS.
-#
-# If you're here, you probably need CUDA, you game, or you lost a bet.
 nvidia_from_stable() {
   log_run "NVIDIA (Debian repo)" bash -c "apt-get update && apt-get install -y --no-install-recommends nvidia-driver"
   msg "NVIDIA" "Done. A reboot is usually recommended.\n\nIf it breaks later, remember: you chose this timeline."
@@ -384,7 +451,6 @@ This may fail unless ${DEBIAN_CODENAME}-backports is configured."
 
 # ---------- Steam / Flatpak ----------
 install_steam() {
-  # Steam: the reason multiarch and i386 won’t die. Respectfully.
   log_run "Install Steam" bash -c "apt-get update && apt-get install -y --no-install-recommends steam"
   msg "Steam" "Done.\n\nIf Steam doesn’t launch, welcome to the club. Check multiarch/i386 deps."
 }
@@ -518,8 +584,6 @@ build_wm_menu_items() {
   local tmp
   tmp="$(mktemp)"
 
-  # Best-effort repo scrape for WMs/compositors.
-  # Linux has like 900 of these and half are a weekend project with a README.
   {
     apt-cache search window\ manager 2>/dev/null || true
     apt-cache search compositor 2>/dev/null || true
@@ -610,7 +674,6 @@ desktop_and_wm_menu() {
 main() {
   need_root
 
-  # Ensure dialog exists first (ncurses UI).
   if ! have_cmd dialog; then
     apt-get update
     DEBIAN_FRONTEND=noninteractive apt-get install -y dialog
@@ -627,24 +690,7 @@ main() {
     choice="$(dialog --clear \
       --backtitle "${APP_TITLE} — ${DEBIAN_VERSION_ID} (${DEBIAN_CODENAME}) | Backports: ${BACKPORTS_ENABLED}" \
       --title "Main Menu" \
-      --menu "Do the thing:" 20 92 9 \
-      1 "Update kernel" \
-      2 "Update/install NVIDIA drivers" \
-      3 "Install Steam" \
-      4 "Install Flatpak" \
-      5 "Desktop & Window Systems (DE/WMs)" \
-      0 "Exit" \
-      2>&1 >/dev/tty || true)"
-
-    case "$choice" in
-      1) kernel_menu ;;
-      2) nvidia_menu ;;
-      3) install_steam ;;
-      4) install_flatpak ;;
-      5) desktop_and_wm_menu ;;
-      0|"") clear; exit 0 ;;
-    esac
-  done
-}
-
-main "$@"
+      --menu "Do the thing:" 21 96 10 \
+      1 "Backports manager (enable/check)" \
+      2 "Update kernel" \
+      3 "Update/install NVIDIA
